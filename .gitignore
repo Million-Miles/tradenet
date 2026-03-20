@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+
+# 回测数据缓存
+kdata/
+data/
+
+# 回测输出
+*.csv
+
+# Claude Code 个人设置
+.claude/settings.local.json
+
+# 系统文件
+.DS_Store
