@@ -54,10 +54,6 @@ class StrategyEngine:
     # 公共属性
     # ─────────────────────────────────────────────────────────────
 
-    @property
-    def unrealized_pnl(self) -> float:
-        return sum(0.0 for _ in self.open_positions)  # 由外部传入close更新
-
     def total_unrealized_pnl(self, current_price: float) -> float:
         return sum(p.unrealized_pnl(current_price) for p in self.open_positions)
 
@@ -97,6 +93,7 @@ class StrategyEngine:
         cfg = self.cfg
         action = ""
         note_parts = []
+        signal = SignalType.NONE
 
         # ── 更新RSI episode状态（信号判断前）────────────────────
         self.signal_state.on_bar_oversold_tracking(
@@ -124,15 +121,18 @@ class StrategyEngine:
 
         # ══ Step3: 止盈检查 ══════════════════════════════════════
         if self.state in (StrategyState.LONG_GRID, StrategyState.SHORT_GRID):
-            if cfg.take_profit_usdt > 0 and self.open_positions:
+            if self.open_positions:
                 upnl = self.total_unrealized_pnl(close)
-                if upnl >= cfg.take_profit_usdt:
+                tp_usdt = cfg.take_profit_usdt > 0 and upnl >= cfg.take_profit_usdt
+                tp_pct  = cfg.take_profit_pct  > 0 and upnl >= capital * cfg.take_profit_pct
+                if tp_usdt or tp_pct:
                     self._close_all_positions(close, bar_idx, "TAKE_PROFIT")
                     self._cancel_all_orders()
                     self._reset_round_state()
                     self.state = StrategyState.IDLE
                     action = "TAKE_PROFIT"
-                    note_parts.append(f"止盈: 浮盈={upnl:.2f} >= {cfg.take_profit_usdt:.2f} USDT")
+                    reason = f"{cfg.take_profit_usdt:.2f} USDT" if tp_usdt else f"{cfg.take_profit_pct*100:.1f}% 本金"
+                    note_parts.append(f"止盈: 浮盈={upnl:.2f} >= {reason}")
                     return self._make_log(bar_idx, timestamp, close, rsi, atr, action, capital, note_parts)
 
         # ══ Step4: 单次策略止损检查 ══════════════════════════════
@@ -198,14 +198,14 @@ class StrategyEngine:
             if new_orders:
                 self.pending_orders.extend(new_orders)
                 # 更新状态
-                if signal in (SignalType.LONG_FIRST, SignalType.LONG_SECOND_A, SignalType.LONG_SECOND_B):
+                if signal in (SignalType.LONG_SECOND_A, SignalType.LONG_SECOND_B):
                     self.state = StrategyState.LONG_GRID
                 else:
                     self.state = StrategyState.SHORT_GRID
                 action = f"PLACE_ORDERS ({signal.value})"
                 note_parts.append(f"挂{len(new_orders)}单 close={close:.2f} ATR={atr:.4f}")
 
-        log = self._make_log(bar_idx, timestamp, close, rsi, atr, action, capital, note_parts)
+        log = self._make_log(bar_idx, timestamp, close, rsi, atr, action, capital, note_parts, signal)
         self.bar_logs.append(log)
         return log
 
@@ -224,75 +224,81 @@ class StrategyEngine:
         cfg = self.cfg
         ss = self.signal_state
 
-        # ── 多单信号（超卖）──────────────────────────────────────
-        # 只有在有前次超卖记录且未过期时才判断，无前次记录一律不开单
+        # ── 多单信号（超卖区间内RSI回头）────────────────────────
         if rsi < RSI_OVERSOLD and rsi > prev_rsi:
-            bars_since = ss.bars_since_prev_oversold(bar_idx)
-            no_prev = (ss.prev_oversold is None)
-            too_old = (bars_since is not None and bars_since > cfg.second_signal_valid_bars)
+            return self._check_episode_signal(
+                bar_idx=bar_idx,
+                close=close,
+                rsi=rsi,
+                prev_episode=ss.prev_oversold,
+                curr_episode=ss.curr_oversold,
+                bars_since=ss.bars_since_prev_oversold(bar_idx),
+                had_opposite=ss.between_oversold_had_overbought,
+                is_long=True,
+            )
 
-            if no_prev or too_old:
-                return SignalType.NONE
-
-            prev = ss.prev_oversold
-            assert prev is not None
-
-            if ss.between_oversold_had_overbought:
-                return SignalType.NONE
-
-            curr = ss.curr_oversold
-            curr_rsi_low   = curr.rsi_low   if curr is not None else rsi
-            curr_price_low = curr.price_low if curr is not None else close
-
-            if prev.rsi_low < cfg.rsi_divergence_depth:
-                return SignalType.LONG_SECOND_B
-
-            if RSI_OVERSOLD >= prev.rsi_low >= cfg.rsi_divergence_depth:
-                divergence = (
-                    curr_price_low < prev.close_at_rsi_low  # 价格创新低
-                    and curr_rsi_low > prev.rsi_low          # RSI未创新低
-                    and close > curr_price_low               # 当前价已从低点反弹（价格回头确认）
-                )
-                if divergence:
-                    return SignalType.LONG_SECOND_A
-
-            return SignalType.NONE
-
-        # ── 空单信号（超买）──────────────────────────────────────
+        # ── 空单信号（超买区间内RSI回头）────────────────────────
         if rsi > RSI_OVERBOUGHT and rsi < prev_rsi:
-            bars_since = ss.bars_since_prev_overbought(bar_idx)
-            no_prev = (ss.prev_overbought is None)
-            too_old = (bars_since is not None and bars_since > cfg.second_signal_valid_bars)
+            return self._check_episode_signal(
+                bar_idx=bar_idx,
+                close=close,
+                rsi=rsi,
+                prev_episode=ss.prev_overbought,
+                curr_episode=ss.curr_overbought,
+                bars_since=ss.bars_since_prev_overbought(bar_idx),
+                had_opposite=ss.between_overbought_had_oversold,
+                is_long=False,
+            )
 
-            if no_prev or too_old:
-                return SignalType.NONE
+        return SignalType.NONE
 
-            prev = ss.prev_overbought
-            assert prev is not None
+    def _check_episode_signal(
+        self,
+        bar_idx: int,
+        close: float,
+        rsi: float,
+        prev_episode,
+        curr_episode,
+        bars_since,
+        had_opposite: bool,
+        is_long: bool,
+    ) -> SignalType:
+        """通用信号判断：多空对称逻辑，避免重复代码。"""
+        cfg = self.cfg
 
-            if ss.between_overbought_had_oversold:
-                return SignalType.NONE
-
-            curr = ss.curr_overbought
-            deep_ob_threshold = 100.0 - cfg.rsi_divergence_depth  # 80.0
-
-            curr_rsi_high   = curr.rsi_high   if curr is not None else rsi
-            curr_price_high = curr.price_high if curr is not None else close
-
-            if prev.rsi_high > deep_ob_threshold:
-                return SignalType.SHORT_SECOND_B
-
-            if RSI_OVERBOUGHT <= prev.rsi_high <= deep_ob_threshold:
-                divergence = (
-                    curr_price_high > prev.close_at_rsi_high  # 价格创新高
-                    and curr_rsi_high < prev.rsi_high          # RSI未创新高
-                    and close < curr_price_high                # 当前价已从高点回落（价格回头确认）
-                )
-                if divergence:
-                    return SignalType.SHORT_SECOND_A
-
+        if prev_episode is None:
+            return SignalType.NONE
+        if bars_since is not None and bars_since > cfg.second_signal_valid_bars:
+            return SignalType.NONE
+        if had_opposite:
             return SignalType.NONE
 
+        signal_b = SignalType.LONG_SECOND_B if is_long else SignalType.SHORT_SECOND_B
+        signal_a = SignalType.LONG_SECOND_A if is_long else SignalType.SHORT_SECOND_A
+        depth = cfg.rsi_divergence_depth
+
+        if is_long:
+            extreme_rsi  = prev_episode.rsi_low
+            curr_extreme  = curr_episode.rsi_low   if curr_episode is not None else rsi
+            curr_price    = curr_episode.price_low  if curr_episode is not None else close
+            prev_price    = prev_episode.close_at_rsi_low
+            deep_trigger  = extreme_rsi < depth
+            normal_range  = depth <= extreme_rsi <= RSI_OVERSOLD
+            divergence    = (curr_price < prev_price and curr_extreme > extreme_rsi and close > curr_price)
+        else:
+            extreme_rsi  = prev_episode.rsi_high
+            curr_extreme  = curr_episode.rsi_high   if curr_episode is not None else rsi
+            curr_price    = curr_episode.price_high if curr_episode is not None else close
+            prev_price    = prev_episode.close_at_rsi_high
+            deep_threshold = 100.0 - depth
+            deep_trigger  = extreme_rsi > deep_threshold
+            normal_range  = RSI_OVERBOUGHT <= extreme_rsi <= deep_threshold
+            divergence    = (curr_price > prev_price and curr_extreme < extreme_rsi and close < curr_price)
+
+        if deep_trigger:
+            return signal_b
+        if normal_range and divergence:
+            return signal_a
         return SignalType.NONE
 
     # ─────────────────────────────────────────────────────────────
@@ -309,9 +315,7 @@ class StrategyEngine:
     ) -> List[Order]:
         """计算6个网格挂单，返回 Order 列表（已完成保证金校验）"""
         cfg = self.cfg
-        is_long = signal in (
-            SignalType.LONG_FIRST, SignalType.LONG_SECOND_A, SignalType.LONG_SECOND_B
-        )
+        is_long = signal in (SignalType.LONG_SECOND_A, SignalType.LONG_SECOND_B)
         side = OrderSide.BUY if is_long else OrderSide.SELL
 
         # ── 挂单价格（斐波那契间距：0,1,2,3,5,8）─────────────────
@@ -362,6 +366,9 @@ class StrategyEngine:
         tf_adj   = clip(√tf_minutes / √60, 0.2, 1.0)
         qty      = floor(qty_base × lev_adj × tf_adj / min_step) × min_step
         """
+        if atr <= 0 or capital <= 0:
+            return 0.0
+
         cfg = self.cfg
         n_min = cfg.min_trade_opportunities
 
@@ -523,6 +530,7 @@ class StrategyEngine:
         action: str,
         capital: float,
         note_parts: list,
+        signal: SignalType = SignalType.NONE,
     ) -> BarLog:
         return BarLog(
             bar_idx=bar_idx,
@@ -531,7 +539,7 @@ class StrategyEngine:
             rsi=round(rsi, 2),
             atr=round(atr, 4),
             state=self.state.value,
-            signal="",
+            signal=signal.value,
             action=action,
             equity=round(capital, 4),
             wallet_balance=round(self.wallet_balance, 4),

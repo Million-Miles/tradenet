@@ -27,7 +27,7 @@ from typing import Optional
 
 import pandas as pd
 
-from config import StrategyConfig
+from config import StrategyConfig, INTERVAL_MINUTES
 from backtest import BacktestEngine
 
 
@@ -203,17 +203,6 @@ def fetch_binance_klines(
 
 
 # ─────────────────────────────────────────────────────────────────
-# 时间周期分钟数解析
-# ─────────────────────────────────────────────────────────────────
-
-INTERVAL_MINUTES = {
-    "1m": 1, "3m": 3, "5m": 5, "15m": 15, "30m": 30,
-    "1h": 60, "2h": 120, "4h": 240, "6h": 360, "8h": 480,
-    "12h": 720, "1d": 1440,
-}
-
-
-# ─────────────────────────────────────────────────────────────────
 # 主函数
 # ─────────────────────────────────────────────────────────────────
 
@@ -222,14 +211,30 @@ def main():
         description="动态网格交易策略 V2.1 — 回测工具",
         formatter_class=argparse.RawTextHelpFormatter,
     )
-    parser.add_argument("--config",  type=str, default="config.ini",  help="策略参数文件（默认 config.ini）")
-    parser.add_argument("--backtest",type=str, default="backtest.ini", help="回测参数文件（默认 backtest.ini）")
+    parser.add_argument("--config",        type=str,   default="config.ini",  help="策略参数文件（默认 config.ini）")
+    parser.add_argument("--backtest",       type=str,   default="backtest.ini", help="回测参数文件（默认 backtest.ini）")
+    # 命令行覆盖参数（优先级高于 ini 文件）
+    parser.add_argument("--capital",        type=float, default=None, help="初始本金 USDT")
+    parser.add_argument("--leverage",       type=int,   default=None, help="杠杆倍数")
+    parser.add_argument("--first-coeff",    type=float, default=None, help="第一单距现价系数")
+    parser.add_argument("--spacing-coeff",  type=float, default=None, help="网格间距系数")
+    parser.add_argument("--take-profit",    type=float, default=None, help="止盈金额 USDT（0=不启用）")
+    parser.add_argument("--stop-loss",      type=float, default=None, help="单次策略止损比例（如 0.3）")
     args = parser.parse_args()
 
     # ── 加载配置 ─────────────────────────────────────────────────
     print(f"[配置] 策略参数: {args.config}")
     print(f"[配置] 回测参数: {args.backtest}")
     cfg = StrategyConfig.from_ini(args.config, args.backtest)
+
+    # ── 命令行参数覆盖 ───────────────────────────────────────────
+    if args.capital       is not None: cfg.initial_capital        = args.capital
+    if args.leverage      is not None: cfg.leverage               = args.leverage
+    if args.first_coeff   is not None: cfg.first_order_coeff      = args.first_coeff
+    if args.spacing_coeff is not None: cfg.grid_spacing_coeff     = args.spacing_coeff
+    if args.take_profit   is not None: cfg.take_profit_usdt       = args.take_profit
+    if args.stop_loss     is not None: cfg.single_strategy_stop_loss = args.stop_loss
+    cfg.validate()
 
     # ── 读取回测专用字段（数据来源、输出路径）────────────────────
     import configparser as _cp

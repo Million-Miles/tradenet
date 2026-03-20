@@ -239,7 +239,7 @@ class BacktestResult:
             "win_rate_pct":     round(len(wins) / len(trades) * 100, 1) if trades else 0,
             "avg_win":          round(avg_win, 2),
             "avg_loss":         round(avg_loss, 2),
-            "profit_factor":    round(profit_factor, 3),
+            "profit_factor":    round(profit_factor, 3) if profit_factor != float("inf") else None,
             "total_commission": round(sum(t.commission for t in trades), 2),
             "final_state":      self.engine.state.value,
         }
@@ -265,7 +265,8 @@ class BacktestResult:
         print(f"  胜率:        {s.get('win_rate_pct'):.1f}%")
         print(f"  平均盈利:    {s.get('avg_win'):+.2f} USDT")
         print(f"  平均亏损:    {s.get('avg_loss'):+.2f} USDT")
-        print(f"  盈亏比:      {s.get('profit_factor'):.3f}")
+        pf = s.get('profit_factor')
+        print(f"  盈亏比:      {'∞（无亏损交易）' if pf is None else f'{pf:.3f}'}")
         print(line)
         print(f"  累计手续费:  {s.get('total_commission'):,.2f} USDT")
         print(f"  策略最终状态: {s.get('final_state')}")
@@ -300,7 +301,7 @@ class BacktestResult:
         for _, row in self.equity_curve.iterrows():
             ts_map[int(row["bar_idx"])] = str(row["timestamp"])[:16]
 
-        # 从 bar_logs 解析 PLACE_ORDERS 事件：place_bar → 信号标签
+        # 从 bar_logs 提取 PLACE_ORDERS 事件：place_bar → 信号标签
         SIGNAL_LABELS = {
             "LONG_SECOND_A":  "背离(多)",
             "LONG_SECOND_B":  "深度超卖",
@@ -310,8 +311,7 @@ class BacktestResult:
         place_events: list = []  # [(place_bar, label)] 有序列表
         for log in self.bar_logs:
             if log.action.startswith("PLACE_ORDERS"):
-                signal_val = log.action.replace("PLACE_ORDERS (", "").rstrip(")")
-                label = SIGNAL_LABELS.get(signal_val, signal_val)
+                label = SIGNAL_LABELS.get(log.signal, log.signal)
                 place_events.append((log.bar_idx, label))
 
         def get_signal_label(fill_bar: int) -> str:

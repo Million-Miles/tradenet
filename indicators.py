@@ -19,8 +19,13 @@ def calc_rsi(close: pd.Series, period: int = 14) -> pd.Series:
     avg_gain = gain.ewm(alpha=1 / period, min_periods=period, adjust=False).mean()
     avg_loss = loss.ewm(alpha=1 / period, min_periods=period, adjust=False).mean()
 
-    rs = avg_gain / avg_loss.replace(0, np.nan)
-    rsi = 100.0 - (100.0 / (1.0 + rs))
+    # avg_loss=0 且 avg_gain>0 时 RSI=100；avg_loss=0 且 avg_gain=0 时 RSI=50（横盘）
+    rsi = pd.Series(np.where(
+        avg_loss == 0,
+        np.where(avg_gain == 0, 50.0, 100.0),
+        100.0 - (100.0 / (1.0 + avg_gain / avg_loss)),
+    ), index=close.index)
+    rsi[avg_gain.isna() | avg_loss.isna()] = np.nan
     return rsi
 
 

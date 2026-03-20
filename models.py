@@ -29,20 +29,13 @@ class OrderStatus(Enum):
     CANCELLED = "CANCELLED"
 
 
-class StopThreshold(Enum):
-    """挂单停止条件阈值类型"""
-    NORMAL   = "NORMAL"    # 多单RSI>30 / 空单RSI<70
-    EXTENDED = "EXTENDED"  # 多单RSI>40 / 空单RSI<60
-
 
 class SignalType(Enum):
     NONE            = "NONE"
-    LONG_FIRST      = "LONG_FIRST"       # 首次超卖
-    LONG_SECOND_A   = "LONG_SECOND_A"    # 二次超卖A（普通背离）
+    LONG_SECOND_A   = "LONG_SECOND_A"    # 二次超卖A（底背离）
     LONG_SECOND_B   = "LONG_SECOND_B"    # 二次超卖B（深度超卖）
-    SHORT_FIRST     = "SHORT_FIRST"
-    SHORT_SECOND_A  = "SHORT_SECOND_A"
-    SHORT_SECOND_B  = "SHORT_SECOND_B"
+    SHORT_SECOND_A  = "SHORT_SECOND_A"   # 二次超买A（顶背离）
+    SHORT_SECOND_B  = "SHORT_SECOND_B"   # 二次超买B（深度超买）
 
 
 # ─────────────────────────────────────────────────────────────────

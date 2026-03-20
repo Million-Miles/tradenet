@@ -9,6 +9,12 @@ from dataclasses import dataclass, field
 RSI_OVERBOUGHT: float = 70.0
 RSI_OVERSOLD: float = 30.0
 
+INTERVAL_MINUTES: dict = {
+    "1m": 1, "3m": 3, "5m": 5, "15m": 15, "30m": 30,
+    "1h": 60, "2h": 120, "4h": 240, "6h": 360,
+    "8h": 480, "12h": 720, "1d": 1440,
+}
+
 
 @dataclass
 class StrategyConfig:
@@ -38,6 +44,7 @@ class StrategyConfig:
     # ── 风险管理 ──────────────────────────────────────────────────
     max_position_ratio: float = 1.0     # 已用保证金占当前本金上限
     take_profit_usdt: float = 0.0       # 止盈金额（USDT），0 = 不启用
+    take_profit_pct: float = 0.0        # 止盈比例（本金百分比），0 = 不启用；任一满足即触发
     single_strategy_stop_loss: float = 0.20   # 单次策略止损：浮亏超过本金此比例
     global_stop_loss: float = 0.30      # 全局止损：累计总亏损超过初始本金此比例
     min_trade_opportunities: int = 50   # 最低下单机会次数（用于仓位计算）
@@ -72,11 +79,6 @@ class StrategyConfig:
         def get(section, key, fallback):
             return ini.get(section, key, fallback=str(fallback))
 
-        INTERVAL_MINUTES = {
-            "1m": 1, "3m": 3, "5m": 5, "15m": 15, "30m": 30,
-            "1h": 60, "2h": 120, "4h": 240, "6h": 360,
-            "8h": 480, "12h": 720, "1d": 1440,
-        }
         timeframe = get("timeframe", "interval", "1m")
 
         return cls(
@@ -93,6 +95,7 @@ class StrategyConfig:
             grid_spacing_coeff        = float(get("grid",   "spacing_coeff",             1.0)),
             max_position_ratio        = float(get("risk",   "max_position_ratio",        1.0)),
             take_profit_usdt          = float(get("risk",   "take_profit_usdt",          0.0)),
+            take_profit_pct           = float(get("risk",   "take_profit_pct",            0.0)),
             single_strategy_stop_loss = float(get("risk",   "single_strategy_stop_loss", 0.20)),
             global_stop_loss          = float(get("risk",   "global_stop_loss",          0.30)),
             min_trade_opportunities   = int(get("risk",     "min_trade_opportunities",   50)),
